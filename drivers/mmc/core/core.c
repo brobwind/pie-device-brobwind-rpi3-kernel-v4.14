@@ -2210,7 +2210,8 @@ EXPORT_SYMBOL(mmc_erase);
 int mmc_can_erase(struct mmc_card *card)
 {
 	if ((card->host->caps & MMC_CAP_ERASE) &&
-	    (card->csd.cmdclass & CCC_ERASE) && card->erase_size)
+	    (card->csd.cmdclass & CCC_ERASE) && card->erase_size &&
+	    !(card->quirks & MMC_QUIRK_ERASE_BROKEN))
 		return 1;
 	return 0;
 }
@@ -2809,22 +2810,6 @@ void mmc_init_context_info(struct mmc_host *host)
 	host->context_info.is_waiting_last_req = false;
 	init_waitqueue_head(&host->context_info.wait);
 }
-
-#ifdef CONFIG_MMC_EMBEDDED_SDIO
-void mmc_set_embedded_sdio_data(struct mmc_host *host,
-				struct sdio_cis *cis,
-				struct sdio_cccr *cccr,
-				struct sdio_embedded_func *funcs,
-				int num_funcs)
-{
-	host->embedded_sdio_data.cis = cis;
-	host->embedded_sdio_data.cccr = cccr;
-	host->embedded_sdio_data.funcs = funcs;
-	host->embedded_sdio_data.num_funcs = num_funcs;
-}
-
-EXPORT_SYMBOL(mmc_set_embedded_sdio_data);
-#endif
 
 static int __init mmc_init(void)
 {

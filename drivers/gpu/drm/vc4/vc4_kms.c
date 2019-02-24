@@ -53,7 +53,8 @@ vc4_atomic_complete_commit(struct drm_atomic_state *state)
 	 * display lists before we free it and potentially reallocate
 	 * and overwrite the dlist memory with a new modeset.
 	 */
-	state->legacy_cursor_update = false;
+	if (!vc4->firmware_kms)
+		state->legacy_cursor_update = false;
 
 	drm_atomic_helper_commit_hw_done(state);
 
@@ -221,6 +222,7 @@ int vc4_kms_load(struct drm_device *dev)
 	dev->mode_config.funcs = &vc4_mode_funcs;
 	dev->mode_config.preferred_depth = 24;
 	dev->mode_config.async_page_flip = true;
+	dev->mode_config.allow_fb_modifiers = true;
 
 	drm_mode_config_reset(dev);
 

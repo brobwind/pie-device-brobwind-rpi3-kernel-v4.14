@@ -309,16 +309,13 @@ static const struct drm_connector_helper_funcs vc4_hdmi_connector_helper_funcs =
 static struct drm_connector *vc4_hdmi_connector_init(struct drm_device *dev,
 						     struct drm_encoder *encoder)
 {
-	struct drm_connector *connector = NULL;
+	struct drm_connector *connector;
 	struct vc4_hdmi_connector *hdmi_connector;
-	int ret = 0;
 
 	hdmi_connector = devm_kzalloc(dev->dev, sizeof(*hdmi_connector),
 				      GFP_KERNEL);
-	if (!hdmi_connector) {
-		ret = -ENOMEM;
-		goto fail;
-	}
+	if (!hdmi_connector)
+		return ERR_PTR(-ENOMEM);
 	connector = &hdmi_connector->base;
 
 	hdmi_connector->encoder = encoder;
@@ -336,12 +333,6 @@ static struct drm_connector *vc4_hdmi_connector_init(struct drm_device *dev,
 	drm_mode_connector_attach_encoder(connector, encoder);
 
 	return connector;
-
- fail:
-	if (connector)
-		vc4_hdmi_connector_destroy(connector);
-
-	return ERR_PTR(ret);
 }
 
 static void vc4_hdmi_encoder_destroy(struct drm_encoder *encoder)
@@ -704,7 +695,22 @@ static void vc4_hdmi_encoder_enable(struct drm_encoder *encoder)
 	}
 }
 
+static enum drm_mode_status
+vc4_hdmi_encoder_mode_valid(struct drm_encoder *crtc,
+			    const struct drm_display_mode *mode)
+{
+	/* HSM clock must be 108% of the pixel clock.  Additionally,
+	 * the AXI clock needs to be at least 25% of pixel clock, but
+	 * HSM ends up being the limiting factor.
+	 */
+	if (mode->clock > HSM_CLOCK_FREQ / (1000 * 108 / 100))
+		return MODE_CLOCK_HIGH;
+
+	return MODE_OK;
+}
+
 static const struct drm_encoder_helper_funcs vc4_hdmi_encoder_helper_funcs = {
+	.mode_valid = vc4_hdmi_encoder_mode_valid,
 	.disable = vc4_hdmi_encoder_disable,
 	.enable = vc4_hdmi_encoder_enable,
 };
@@ -1124,7 +1130,7 @@ static int vc4_hdmi_audio_init(struct vc4_hdmi *hdmi)
 	 * snd_soc_card_get_drvdata() if needed.
 	 */
 	snd_soc_card_set_drvdata(card, hdmi);
-	ret = devm_snd_soc_register_card(dev, card);
+	ret = snd_soc_register_card(card);
 	if (ret) {
 		dev_err(dev, "Could not register sound card: %d\n", ret);
 		goto unregister_codec;
@@ -1141,13 +1147,16 @@ unregister_codec:
 static void vc4_hdmi_audio_cleanup(struct vc4_hdmi *hdmi)
 {
 	struct device *dev = &hdmi->pdev->dev;
+	struct snd_soc_card *card = &hdmi->audio.card;
 
 	/*
 	 * If drvdata is not set this means the audio card was not
 	 * registered, just skip codec unregistration in this case.
 	 */
-	if (dev_get_drvdata(dev))
+	if (dev_get_drvdata(dev)) {
+		snd_soc_unregister_card(card);
 		snd_soc_unregister_codec(dev);
+	}
 }
 
 #ifdef CONFIG_DRM_VC4_HDMI_CEC

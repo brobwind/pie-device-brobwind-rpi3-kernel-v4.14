@@ -1,0 +1,27 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835", "brcm,bcm2708", "brcm,bcm2709";
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			firmware: firmware {
+				android {
+					compatible = "android,firmware";
+					android_fstab: fstab {
+						compatible = "android,fstab";
+						vendor {
+							compatible = "android,vendor";
+							dev = "/dev/block/platform/soc/3f202000.mmc/by-name/vendor";
+							type = "ext4";
+							mnt_flags = "ro,barrier=1,discard";
+							fsmgr_flags = "wait,slotselect";
+						};
+					};
+				};
+			};
+		};
+	};
+};

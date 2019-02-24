@@ -223,7 +223,7 @@ vc4_allocate_bin_bo(struct drm_device *drm)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(drm);
 	struct vc4_v3d *v3d = vc4->v3d;
-	uint32_t size = 16 * 1024 * 1024;
+	uint32_t size = 8 * 1024 * 1024;
 	int ret = 0;
 	struct list_head list;
 
@@ -274,8 +274,8 @@ vc4_allocate_bin_bo(struct drm_device *drm)
 			vc4->bin_alloc_size = 512 * 1024;
 			vc4->bin_alloc_used = 0;
 			vc4->bin_alloc_overflow = 0;
-			WARN_ON_ONCE(sizeof(vc4->bin_alloc_used) * 8 !=
-				     bo->base.base.size / vc4->bin_alloc_size);
+			/*WARN_ON_ONCE(sizeof(vc4->bin_alloc_used) * 8 !=
+				     bo->base.base.size / vc4->bin_alloc_size); */
 
 			break;
 		}

@@ -32,6 +32,9 @@ enum vc4_kernel_bo_type {
 struct vc4_dev {
 	struct drm_device *dev;
 
+	bool firmware_kms;
+	struct rpi_firmware *firmware;
+
 	struct vc4_hdmi *hdmi;
 	struct vc4_hvs *hvs;
 	struct vc4_v3d *v3d;
@@ -73,6 +76,19 @@ struct vc4_dev {
 
 	/* Protects bo_cache and bo_labels. */
 	struct mutex bo_lock;
+
+	/* Purgeable BO pool. All BOs in this pool can have their memory
+	 * reclaimed if the driver is unable to allocate new BOs. We also
+	 * keep stats related to the purge mechanism here.
+	 */
+	struct {
+		struct list_head list;
+		unsigned int num;
+		size_t size;
+		unsigned int purged_num;
+		size_t purged_size;
+		struct mutex lock;
+	} purgeable;
 
 	uint64_t dma_fence_context;
 
@@ -192,6 +208,16 @@ struct vc4_bo {
 	 * for user-allocated labels.
 	 */
 	int label;
+
+	/* Count the number of active users. This is needed to determine
+	 * whether we can move the BO to the purgeable list or not (when the BO
+	 * is used by the GPU or the display engine we can't purge it).
+	 */
+	refcount_t usecnt;
+
+	/* Store purgeable/purged state here */
+	u32 madv;
+	struct mutex madv_lock;
 };
 
 static inline struct vc4_bo *
@@ -250,6 +276,66 @@ static inline struct vc4_plane *
 to_vc4_plane(struct drm_plane *plane)
 {
 	return (struct vc4_plane *)plane;
+}
+
+enum vc4_scaling_mode {
+	VC4_SCALING_NONE,
+	VC4_SCALING_TPZ,
+	VC4_SCALING_PPF,
+};
+
+struct vc4_plane_state {
+	struct drm_plane_state base;
+	/* System memory copy of the display list for this element, computed
+	 * at atomic_check time.
+	 */
+	u32 *dlist;
+	u32 dlist_size; /* Number of dwords allocated for the display list */
+	u32 dlist_count; /* Number of used dwords in the display list. */
+
+	/* Offset in the dlist to various words, for pageflip or
+	 * cursor updates.
+	 */
+	u32 pos0_offset;
+	u32 pos2_offset;
+	u32 ptr0_offset;
+
+	/* Offset where the plane's dlist was last stored in the
+	 * hardware at vc4_crtc_atomic_flush() time.
+	 */
+	u32 __iomem *hw_dlist;
+
+	/* Clipped coordinates of the plane on the display. */
+	int crtc_x, crtc_y, crtc_w, crtc_h;
+	/* Clipped area being scanned from in the FB. */
+	u32 src_x, src_y;
+
+	u32 src_w[2], src_h[2];
+
+	/* Scaling selection for the RGB/Y plane and the Cb/Cr planes. */
+	enum vc4_scaling_mode x_scaling[2], y_scaling[2];
+	bool is_unity;
+	bool is_yuv;
+
+	/* Offset to start scanning out from the start of the plane's
+	 * BO.
+	 */
+	u32 offsets[3];
+
+	/* Our allocation in LBM for temporary storage during scaling. */
+	struct drm_mm_node lbm;
+
+	/* Set when the plane has per-pixel alpha content or does not cover
+	 * the entire screen. This is a hint to the CRTC that it might need
+	 * to enable background color fill.
+	 */
+	bool needs_bg_fill;
+};
+
+static inline struct vc4_plane_state *
+to_vc4_plane_state(struct drm_plane_state *state)
+{
+	return (struct vc4_plane_state *)state;
 }
 
 enum vc4_encoder_type {
@@ -503,6 +589,7 @@ int vc4_get_hang_state_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file_priv);
 int vc4_label_bo_ioctl(struct drm_device *dev, void *data,
 		       struct drm_file *file_priv);
+int vc4_fault(struct vm_fault *vmf);
 int vc4_mmap(struct file *filp, struct vm_area_struct *vma);
 struct reservation_object *vc4_prime_res_obj(struct drm_gem_object *obj);
 int vc4_prime_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma);
@@ -513,6 +600,10 @@ void *vc4_prime_vmap(struct drm_gem_object *obj);
 int vc4_bo_cache_init(struct drm_device *dev);
 void vc4_bo_cache_destroy(struct drm_device *dev);
 int vc4_bo_stats_debugfs(struct seq_file *m, void *arg);
+int vc4_bo_inc_usecnt(struct vc4_bo *bo);
+void vc4_bo_dec_usecnt(struct vc4_bo *bo);
+void vc4_bo_add_to_purgeable_pool(struct vc4_bo *bo);
+void vc4_bo_remove_from_purgeable_pool(struct vc4_bo *bo);
 
 /* vc4_crtc.c */
 extern struct platform_driver vc4_crtc_driver;
@@ -539,6 +630,10 @@ int vc4_dsi_debugfs_regs(struct seq_file *m, void *unused);
 /* vc4_fence.c */
 extern const struct dma_fence_ops vc4_fence_ops;
 
+/* vc4_firmware_kms.c */
+extern struct platform_driver vc4_firmware_kms_driver;
+void vc4_fkms_cancel_page_flip(struct drm_crtc *crtc, struct drm_file *file);
+
 /* vc4_gem.c */
 void vc4_gem_init(struct drm_device *dev);
 void vc4_gem_destroy(struct drm_device *dev);
@@ -557,6 +652,8 @@ void vc4_job_handle_completed(struct vc4_dev *vc4);
 int vc4_queue_seqno_cb(struct drm_device *dev,
 		       struct vc4_seqno_cb *cb, uint64_t seqno,
 		       void (*func)(struct vc4_seqno_cb *cb));
+int vc4_gem_madvise_ioctl(struct drm_device *dev, void *data,
+			  struct drm_file *file_priv);
 
 /* vc4_hdmi.c */
 extern struct platform_driver vc4_hdmi_driver;

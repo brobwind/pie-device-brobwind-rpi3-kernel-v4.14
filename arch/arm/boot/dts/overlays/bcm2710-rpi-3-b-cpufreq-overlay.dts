@@ -1,0 +1,15 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835", "brcm,bcm2708", "brcm,bcm2709";
+
+	fragment@0 {
+		target-path = "/soc";
+		__overlay__ {
+			cpufreq: cpufreq {
+				compatible = "brcm,bcm2835-cpufreq";
+			};
+		};
+	};
+};

@@ -472,47 +472,6 @@ send_key_to_dongle(struct brcmf_if *ifp, struct brcmf_wsec_key *key)
 	return err;
 }
 
-static s32
-brcmf_configure_arp_nd_offload(struct brcmf_if *ifp, bool enable)
-{
-	s32 err;
-	u32 mode;
-
-	if (enable)
-		mode = BRCMF_ARP_OL_AGENT | BRCMF_ARP_OL_PEER_AUTO_REPLY;
-	else
-		mode = 0;
-
-	/* Try to set and enable ARP offload feature, this may fail, then it  */
-	/* is simply not supported and err 0 will be returned                 */
-	err = brcmf_fil_iovar_int_set(ifp, "arp_ol", mode);
-	if (err) {
-		brcmf_dbg(TRACE, "failed to set ARP offload mode to 0x%x, err = %d\n",
-			  mode, err);
-		err = 0;
-	} else {
-		err = brcmf_fil_iovar_int_set(ifp, "arpoe", enable);
-		if (err) {
-			brcmf_dbg(TRACE, "failed to configure (%d) ARP offload err = %d\n",
-				  enable, err);
-			err = 0;
-		} else
-			brcmf_dbg(TRACE, "successfully configured (%d) ARP offload to 0x%x\n",
-				  enable, mode);
-	}
-
-	err = brcmf_fil_iovar_int_set(ifp, "ndoe", enable);
-	if (err) {
-		brcmf_dbg(TRACE, "failed to configure (%d) ND offload err = %d\n",
-			  enable, err);
-		err = 0;
-	} else
-		brcmf_dbg(TRACE, "successfully configured (%d) ND offload to 0x%x\n",
-			  enable, mode);
-
-	return err;
-}
-
 static void
 brcmf_cfg80211_update_proto_addr_mode(struct wireless_dev *wdev)
 {
@@ -2810,6 +2769,8 @@ brcmf_cfg80211_set_power_mgmt(struct wiphy *wiphy, struct net_device *ndev,
 	 * preference in cfg struct to apply this to
 	 * FW later while initializing the dongle
 	 */
+	pr_info("power management disabled\n");
+	enabled = false;
 	cfg->pwr_save = enabled;
 	if (!check_vif_up(ifp->vif)) {
 
@@ -2841,6 +2802,7 @@ static s32 brcmf_inform_single_bss(struct brcmf_cfg80211_info *cfg,
 				   struct brcmf_bss_info_le *bi)
 {
 	struct wiphy *wiphy = cfg_to_wiphy(cfg);
+	struct ieee80211_channel *notify_channel;
 	struct cfg80211_bss *bss;
 	struct ieee80211_supported_band *band;
 	struct brcmu_chan ch;
@@ -2850,7 +2812,7 @@ static s32 brcmf_inform_single_bss(struct brcmf_cfg80211_info *cfg,
 	u16 notify_interval;
 	u8 *notify_ie;
 	size_t notify_ielen;
-	struct cfg80211_inform_bss bss_data = {};
+	s32 notify_signal;
 
 	if (le32_to_cpu(bi->length) > WL_BSS_INFO_MAX) {
 		brcmf_err("Bss info is larger than buffer. Discarding\n");
@@ -2870,28 +2832,27 @@ static s32 brcmf_inform_single_bss(struct brcmf_cfg80211_info *cfg,
 		band = wiphy->bands[NL80211_BAND_5GHZ];
 
 	freq = ieee80211_channel_to_frequency(channel, band->band);
-	bss_data.chan = ieee80211_get_channel(wiphy, freq);
-	bss_data.scan_width = NL80211_BSS_CHAN_WIDTH_20;
-	bss_data.boottime_ns = ktime_to_ns(ktime_get_boottime());
+	notify_channel = ieee80211_get_channel(wiphy, freq);
 
 	notify_capability = le16_to_cpu(bi->capability);
 	notify_interval = le16_to_cpu(bi->beacon_period);
 	notify_ie = (u8 *)bi + le16_to_cpu(bi->ie_offset);
 	notify_ielen = le32_to_cpu(bi->ie_length);
-	bss_data.signal = (s16)le16_to_cpu(bi->RSSI) * 100;
+	notify_signal = (s16)le16_to_cpu(bi->RSSI) * 100;
 
 	brcmf_dbg(CONN, "bssid: %pM\n", bi->BSSID);
 	brcmf_dbg(CONN, "Channel: %d(%d)\n", channel, freq);
 	brcmf_dbg(CONN, "Capability: %X\n", notify_capability);
 	brcmf_dbg(CONN, "Beacon interval: %d\n", notify_interval);
-	brcmf_dbg(CONN, "Signal: %d\n", bss_data.signal);
+	brcmf_dbg(CONN, "Signal: %d\n", notify_signal);
 
-	bss = cfg80211_inform_bss_data(wiphy, &bss_data,
-				       CFG80211_BSS_FTYPE_UNKNOWN,
-				       (const u8 *)bi->BSSID,
-				       0, notify_capability,
-				       notify_interval, notify_ie,
-				       notify_ielen, GFP_KERNEL);
+	bss = cfg80211_inform_bss(wiphy, notify_channel,
+				  CFG80211_BSS_FTYPE_UNKNOWN,
+				  (const u8 *)bi->BSSID,
+				  ktime_get_boot_ns(), notify_capability,
+				  notify_interval, notify_ie,
+				  notify_ielen, notify_signal,
+				  GFP_KERNEL);
 
 	if (!bss)
 		return -ENOMEM;
@@ -2995,10 +2956,10 @@ static s32 brcmf_inform_ibss(struct brcmf_cfg80211_info *cfg,
 	brcmf_dbg(CONN, "signal: %d\n", notify_signal);
 
 	bss = cfg80211_inform_bss(wiphy, notify_channel,
-				  CFG80211_BSS_FTYPE_UNKNOWN, bssid, 0,
-				  notify_capability, notify_interval,
-				  notify_ie, notify_ielen, notify_signal,
-				  GFP_KERNEL);
+				  CFG80211_BSS_FTYPE_UNKNOWN, bssid,
+				  ktime_get_boot_ns(), notify_capability,
+				  notify_interval, notify_ie, notify_ielen,
+				  notify_signal, GFP_KERNEL);
 
 	if (!bss) {
 		err = -ENOMEM;
@@ -6862,12 +6823,18 @@ static s32 brcmf_translate_country_code(struct brcmf_pub *drvr, char alpha2[2],
 	struct brcmfmac_pd_cc *country_codes;
 	struct brcmfmac_pd_cc_entry *cc;
 	s32 found_index;
+	char ccode[BRCMF_COUNTRY_BUF_SZ];
+	int rev;
 	int i;
+
+	memcpy(ccode, alpha2, sizeof(ccode));
+	rev = -1;
 
 	country_codes = drvr->settings->country_codes;
 	if (!country_codes) {
-		brcmf_dbg(TRACE, "No country codes configured for device\n");
-		return -EINVAL;
+		brcmf_dbg(TRACE, "No country codes configured for device"
+				 " - use requested value\n");
+		goto use_input_value;
 	}
 
 	if ((alpha2[0] == ccreq->country_abbrev[0]) &&
@@ -6891,10 +6858,14 @@ static s32 brcmf_translate_country_code(struct brcmf_pub *drvr, char alpha2[2],
 		brcmf_dbg(TRACE, "No country code match found\n");
 		return -EINVAL;
 	}
-	memset(ccreq, 0, sizeof(*ccreq));
-	ccreq->rev = cpu_to_le32(country_codes->table[found_index].rev);
-	memcpy(ccreq->ccode, country_codes->table[found_index].cc,
+	rev = country_codes->table[found_index].rev;
+	memcpy(ccode, country_codes->table[found_index].cc,
 	       BRCMF_COUNTRY_BUF_SZ);
+
+use_input_value:
+	memset(ccreq, 0, sizeof(*ccreq));
+	ccreq->rev = cpu_to_le32(rev);
+	memcpy(ccreq->ccode, ccode, sizeof(ccode));
 	ccreq->country_abbrev[0] = alpha2[0];
 	ccreq->country_abbrev[1] = alpha2[1];
 	ccreq->country_abbrev[2] = 0;
@@ -6918,6 +6889,8 @@ static void brcmf_cfg80211_reg_notifier(struct wiphy *wiphy,
 	/* ignore non-ISO3166 country codes */
 	for (i = 0; i < 2; i++)
 		if (req->alpha2[i] < 'A' || req->alpha2[i] > 'Z') {
+			if (req->alpha2[0] == '0' && req->alpha2[1] == '0')
+				return;
 			brcmf_err("not an ISO3166 code (0x%02x 0x%02x)\n",
 				  req->alpha2[0], req->alpha2[1]);
 			return;
